@@ -14,6 +14,7 @@ public class Packet {
 
     public enum Type {
         DATA,
+        DATA_END,
         SYN,
         ACK,
         SYN_ACK,

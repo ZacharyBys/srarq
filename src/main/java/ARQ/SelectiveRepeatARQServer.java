@@ -1,7 +1,5 @@
 package ARQ;
 
-import jdk.internal.joptsimple.OptionParser;
-import jdk.internal.joptsimple.OptionSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,9 +10,6 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.DatagramChannel;
 import java.nio.charset.StandardCharsets;
-
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.Arrays.asList;
 
 public class SelectiveRepeatARQServer implements ARQ {
     private int port;
@@ -33,7 +28,7 @@ public class SelectiveRepeatARQServer implements ARQ {
         return this.port;
     }
 
-    public ARQSocket accept() throws IOException {
+    public ARQServerSocket accept() throws IOException {
         try (DatagramChannel channel = DatagramChannel.open()) {
             channel.bind(new InetSocketAddress(port));
             ByteBuffer buf = ByteBuffer
@@ -43,6 +38,7 @@ public class SelectiveRepeatARQServer implements ARQ {
             logger.debug("Binding datagram channel to port {}", port);
 
             for (; ; ) {
+                logger.debug("Channel is {}", channel.isOpen());
                 if (this.state == ARQServerState.CLOSED) {
                     // Change state to listen
                     this.state = ARQServerState.LISTEN;
@@ -131,7 +127,8 @@ public class SelectiveRepeatARQServer implements ARQ {
                     // Selective repeat logic
                     logger.debug("Connection established");
                     logger.debug("Current sequence number: {}", base);
-                    return null;
+                    logger.debug("Channel is {}", channel.isOpen());
+                    return new ARQServerSocket(port, base);
                 }
 
             }

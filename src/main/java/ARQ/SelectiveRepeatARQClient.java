@@ -116,7 +116,26 @@ public class SelectiveRepeatARQClient {
                     // Selective repeat logic
                     logger.info("Selective repeat");
                     logger.debug("Current sequence number: {}", base);
+
+                    // Send GET request
+                    responsePacket = new Packet
+                            .Builder()
+                            .setType(Packet.Type.DATA_END.ordinal())
+                            .setPortNumber(serverAddr.getPort())
+                            .setPeerAddress(serverAddr.getAddress())
+                            .setSequenceNumber(++base)
+                            .setPayload("GET /test_file.txt HTTP/1.1\r\n".getBytes())
+                            .create();
+
+                    // Send packet
+                    channel.send(responsePacket.toBuffer(), routerAddr);
+                    logger.debug("Sending GET request: {}", responsePacket);
+                    logger.debug("Router: {}", responsePacket);
+                    String responsePacketPayload = new String(responsePacket.getPayload(), StandardCharsets.UTF_8);
+                    logger.debug("Payload: {}",  responsePacketPayload);
+
                     return;
+//                   while (true);
                 }
 //                // Try to receive a packet within timeout.
 //                channel.configureBlocking(false);
