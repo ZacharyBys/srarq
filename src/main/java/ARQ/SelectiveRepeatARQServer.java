@@ -21,7 +21,7 @@ public class SelectiveRepeatARQServer implements ARQ {
 
     public SelectiveRepeatARQServer(int port) {
         this.port = port;
-        this.state = ARQServerState.CLOSED;
+        state = ARQServerState.CLOSED;
     }
 
     public int getLocalPort() {
@@ -38,16 +38,15 @@ public class SelectiveRepeatARQServer implements ARQ {
             logger.debug("Binding datagram channel to port {}", port);
 
             for (; ; ) {
-                logger.debug("Channel is {}", channel.isOpen());
-                if (this.state == ARQServerState.CLOSED) {
+                if (state == ARQServerState.CLOSED) {
                     // Change state to listen
-                    this.state = ARQServerState.LISTEN;
+                    state = ARQServerState.LISTEN;
                     logger.debug("Changing state from CLOSED to LISTEN");
                 }
 
                 // The packet to respond with
                 Packet responsePacket = null;
-                if (this.state == ARQServerState.LISTEN) {
+                if (state == ARQServerState.LISTEN) {
                     // Handshake: received a SYN
                     logger.debug("In state LISTEN");
 
@@ -59,15 +58,13 @@ public class SelectiveRepeatARQServer implements ARQ {
                     Packet receivedPacket = Packet.fromBuffer(buf);
                     buf.flip();
 
-                    logger.debug("Received packet: {}", receivedPacket);
-                    logger.debug("Router: {}", router);
-                    String payload = new String(receivedPacket.getPayload(), StandardCharsets.UTF_8);
-                    logger.debug("Payload: {}",  payload);
+                    logger.debug("Received packet");
+                    logPacketSentOrReceived(receivedPacket);
 
-                    if (receivedPacket.getType() == Packet.Type.SYN.ordinal() && this.state == ARQServerState.LISTEN) {
+                    if (receivedPacket.getType() == Packet.Type.SYN.ordinal() && state == ARQServerState.LISTEN) {
                         logger.debug("Received packet is of type SYN");
                         // Change state to SYN_RCVD
-                        this.state = ARQServerState.SYN_RCVD;
+                        state = ARQServerState.SYN_RCVD;
 
                         // Set base to sequence number in SYN packet
                         base = receivedPacket.getSequenceNumber();
@@ -84,14 +81,12 @@ public class SelectiveRepeatARQServer implements ARQ {
                                 .create();
 
                         channel.send(responsePacket.toBuffer(), router);
-                        logger.debug("Sending packet of type SYN_ACK: {}", responsePacket);
-                        logger.debug("Router: {}", responsePacket);
-                        String responsePacketPayload = new String(responsePacket.getPayload(), StandardCharsets.UTF_8);
-                        logger.debug("Payload: {}",  responsePacketPayload);
+                        logger.debug("Sending packet of type SYN_ACK");
+                        logPacketSentOrReceived(responsePacket);
 
                         logger.debug("Changing state from LISTEN to SYN_RCVD");
                     }
-                } else if (this.state == ARQServerState.SYN_RCVD) {
+                } else if (state == ARQServerState.SYN_RCVD) {
                     // Handshake: received an acknowledgement of SYN_RCVD
                     logger.debug("In state SYN_RCVD");
 
@@ -103,15 +98,13 @@ public class SelectiveRepeatARQServer implements ARQ {
                     Packet receivedPacket = Packet.fromBuffer(buf);
                     buf.flip();
 
-                    logger.debug("Received packet: {}", receivedPacket);
-                    logger.debug("Router: {}", router);
-                    String payload = new String(receivedPacket.getPayload(), StandardCharsets.UTF_8);
-                    logger.debug("Payload: {}",  payload);
+                    logger.debug("Received packet");
+                    logPacketSentOrReceived(receivedPacket);
 
                     if (receivedPacket.getType() == Packet.Type.ACK.ordinal()) {
                         logger.debug("Received ACK for SYN_RCVD packet");
                         // Change state to ESTAB
-                        this.state = ARQServerState.ESTAB;
+                        state = ARQServerState.ESTAB;
 
                         // Increment sequence number if it the next one
                         if (receivedPacket.getSequenceNumber() == base + 1) {
@@ -123,16 +116,29 @@ public class SelectiveRepeatARQServer implements ARQ {
                         logger.debug("Changing state from SYN_RCVD to ESTAB");
 
                     }
-                } else if (this.state == ARQServerState.ESTAB) {
+                } else if (state == ARQServerState.ESTAB) {
                     // Selective repeat logic
                     logger.debug("Connection established");
                     logger.debug("Current sequence number: {}", base);
-                    logger.debug("Channel is {}", channel.isOpen());
-                    return new ARQServerSocket(port, base);
+
+                    ARQServerSocket serverSocket =  new ARQServerSocket(port, base);
+                    resetForNewConnection();
+                    return serverSocket;
                 }
 
             }
         }
+    }
+
+    private void logPacketSentOrReceived(Packet packet) {
+        logger.debug("Packet: {}", packet);
+        String getRequestPayload = new String(packet.getPayload(), StandardCharsets.UTF_8);
+        logger.debug("Payload: {}",  getRequestPayload);
+    }
+
+    private void resetForNewConnection() {
+        base = 0;
+        state = ARQServerState.CLOSED;
     }
 
     public static void main(String[] args) throws IOException {

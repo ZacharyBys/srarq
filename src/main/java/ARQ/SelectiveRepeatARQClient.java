@@ -1,7 +1,5 @@
 package ARQ;
 
-import jdk.internal.joptsimple.OptionParser;
-import jdk.internal.joptsimple.OptionSet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -9,16 +7,10 @@ import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
 import java.nio.channels.DatagramChannel;
-import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
 import java.nio.charset.StandardCharsets;
-import java.security.Policy;
-import java.util.Set;
-
-import static java.nio.channels.SelectionKey.OP_READ;
-import static java.nio.charset.StandardCharsets.UTF_8;
+import java.util.ArrayList;
+import java.util.List;
 
 public class SelectiveRepeatARQClient {
 
@@ -28,7 +20,7 @@ public class SelectiveRepeatARQClient {
     private SocketAddress routerAddr;
 
     public SelectiveRepeatARQClient(InetSocketAddress serverAddr, SocketAddress routerAddr) {
-        this.state = ARQClientState.LISTEN;
+        state = ARQClientState.LISTEN;
         this.base = 0L;
         this.serverAddr = serverAddr;
         this.routerAddr = routerAddr;
@@ -41,9 +33,9 @@ public class SelectiveRepeatARQClient {
             for (; ; ) {
                 // The packet to respond with
                 Packet responsePacket;
-                if (this.state == ARQClientState.LISTEN) {
+                if (state == ARQClientState.LISTEN) {
                     // Change state to SYN_RCVD
-                    this.state = ARQClientState.SYN_SENT;
+                    state = ARQClientState.SYN_SENT;
 
                     // Create SYN_SENT packet
                     responsePacket = new Packet
@@ -58,12 +50,10 @@ public class SelectiveRepeatARQClient {
                     // Send packet
                     channel.send(responsePacket.toBuffer(), routerAddr);
                     logger.info("Changing state from LISTEN to SYN_SENT");
-                    logger.debug("Sending packet of type SYN: {}", responsePacket);
-                    logger.debug("Router: {}", responsePacket);
-                    String responsePacketPayload = new String(responsePacket.getPayload(), StandardCharsets.UTF_8);
-                    logger.debug("Payload: {}",  responsePacketPayload);
+                    logger.debug("Sending SYN packet");
+                    logPacketSentOrReceived(responsePacket);
 
-                } else if (this.state == ARQClientState.SYN_SENT) {
+                } else if (state == ARQClientState.SYN_SENT) {
                     // Wait for acknowledgment of SYN packet
                     ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
                     SocketAddress router = channel.receive(buf);
@@ -73,17 +63,14 @@ public class SelectiveRepeatARQClient {
                     Packet packet = Packet.fromBuffer(buf);
                     buf.flip();
 
-                    logger.debug("Received packet: {}", packet);
-                    logger.debug("Router: {}", router);
-                    String payload = new String(packet.getPayload(), StandardCharsets.UTF_8);
-                    logger.debug("Payload: {}",  payload);
+                    logPacketSentOrReceived(packet);
 
                     // Handshake: received and acknowledgement of SYN_RCVD
                     if (packet.getType() == Packet.Type.SYN_ACK.ordinal()) {
                         logger.info("Received packet is of type SYN_ACK");
 
                         // Change state to ESTAB
-                        this.state = ARQClientState.ESTAB;
+                        state = ARQClientState.ESTAB;
 
                         // Increment base to next sequence number
                         if (packet.getSequenceNumber() == base) {
@@ -104,38 +91,65 @@ public class SelectiveRepeatARQClient {
 
                         // Send packet
                         channel.send(responsePacket.toBuffer(), router);
-                        logger.debug("Sending ACK for SYN_ACK: {}", responsePacket);
-                        logger.debug("Router: {}", responsePacket);
-                        String responsePacketPayload = new String(responsePacket.getPayload(), StandardCharsets.UTF_8);
-                        logger.debug("Payload: {}",  responsePacketPayload);
+                        logger.debug("Sending ACK for SYN_ACK");
+                        logPacketSentOrReceived(responsePacket);
 
                         logger.info("Changing state from SYN_SENT to ESTAB");
 
                     }
-                } else if (this.state == ARQClientState.ESTAB) {
+                } else if (state == ARQClientState.ESTAB) {
                     // Selective repeat logic
                     logger.info("Selective repeat");
                     logger.debug("Current sequence number: {}", base);
 
+                    // BELOW IS JUST A TEST
+
                     // Send GET request
-                    responsePacket = new Packet
+                    Packet getRequestPacket = new Packet
                             .Builder()
                             .setType(Packet.Type.DATA_END.ordinal())
                             .setPortNumber(serverAddr.getPort())
                             .setPeerAddress(serverAddr.getAddress())
                             .setSequenceNumber(++base)
-                            .setPayload("GET /test_file.txt HTTP/1.1\r\n".getBytes())
+                            .setPayload("GET / HTTP/1.1\r\n".getBytes())
                             .create();
 
-                    // Send packet
-                    channel.send(responsePacket.toBuffer(), routerAddr);
-                    logger.debug("Sending GET request: {}", responsePacket);
-                    logger.debug("Router: {}", responsePacket);
-                    String responsePacketPayload = new String(responsePacket.getPayload(), StandardCharsets.UTF_8);
-                    logger.debug("Payload: {}",  responsePacketPayload);
+                    // Send GET request packet
+                    channel.send(getRequestPacket.toBuffer(), routerAddr);
+                    logger.debug("Sending GET request packet");
+                    logPacketSentOrReceived(getRequestPacket);
 
+                    ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
+                    SocketAddress router = channel.receive(buf);
+
+                    List<Packet> packets = new ArrayList<>();
+
+                    // Parse all packets containing fragmented data
+                    buf.flip();
+                    Packet packet = Packet.fromBuffer(buf);
+                    buf.flip();
+                    while (packet.getType() != Packet.Type.DATA_END.ordinal()) {
+                        packets.add(packet);
+                        buf = ByteBuffer.allocate(Packet.MAX_LEN);
+                        channel.receive(buf);
+                        buf.flip();
+                        packet = Packet.fromBuffer(buf);
+                        buf.flip();
+                    }
+
+                    // Add last DATA_END packet
+                    packets.add(packet);
+
+                    StringBuilder response = new StringBuilder();
+                    logger.debug("Received {} packets", packets.size());
+                    for (Packet p : packets) {
+                        logPacketSentOrReceived(p);
+                        String payload = new String(p.getPayload(), StandardCharsets.UTF_8);
+                        response.append(payload);
+                    }
+
+                    logger.debug("Complete payload received: {}", response);
                     return;
-//                   while (true);
                 }
 //                // Try to receive a packet within timeout.
 //                channel.configureBlocking(false);
@@ -153,6 +167,12 @@ public class SelectiveRepeatARQClient {
 //                keys.clear();
             }
         }
+    }
+
+    private void logPacketSentOrReceived(Packet packet) {
+        logger.debug("Packet: {}", packet);
+        String getRequestPayload = new String(packet.getPayload(), StandardCharsets.UTF_8);
+        logger.debug("Payload: {}",  getRequestPayload);
     }
 
     public static void main(String[] args) throws IOException {
