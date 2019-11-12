@@ -1,9 +1,9 @@
 package ARQ;
 
-import com.sun.org.slf4j.internal.Logger;
-import com.sun.org.slf4j.internal.LoggerFactory;
 import jdk.internal.joptsimple.OptionParser;
 import jdk.internal.joptsimple.OptionSet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;

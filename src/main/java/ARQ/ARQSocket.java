@@ -1,5 +1,8 @@
 package ARQ;
 
+import java.io.InputStream;
+import java.io.OutputStream;
+
 public class ARQSocket {
     int port;
     UDPServer server;
@@ -10,6 +13,18 @@ public class ARQSocket {
         this.port = port;
         this.server = new UDPServer();
         this.state = ARQServerState.CLOSED;
+    }
+
+    public OutputStream getOutputStream() {
+        return null;
+    }
+
+    public InputStream getInputStream() {
+        return null;
+    }
+
+    public void close() {
+
     }
 
     public void handshake() {

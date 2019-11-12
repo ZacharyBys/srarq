@@ -1,7 +1,8 @@
 package http;
 
 import ARQ.ARQ;
-import SelectiveRepeatARQServer;
+import ARQ.SelectiveRepeatARQServer;
+import ARQ.ARQSocket;
 
 import java.io.*;
 import java.net.Socket;
@@ -55,7 +56,7 @@ public class HttpServer {
         this.debug = debug;
     }
 
-    private void readAndHandleRequestFromClient(Socket client) throws IOException {
+    private void readAndHandleRequestFromClient(ARQSocket client) throws IOException {
         BufferedReader reader = new BufferedReader( new InputStreamReader(client.getInputStream()));
 
         StringBuilder stringBuilder = new StringBuilder();

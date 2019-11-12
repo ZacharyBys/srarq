@@ -1,9 +1,9 @@
 package ARQ;
 
-import com.sun.org.slf4j.internal.Logger;
-import com.sun.org.slf4j.internal.LoggerFactory;
 import jdk.internal.joptsimple.OptionParser;
 import jdk.internal.joptsimple.OptionSet;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -14,6 +14,7 @@ import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.charset.StandardCharsets;
+import java.security.Policy;
 import java.util.Set;
 
 import static java.nio.channels.SelectionKey.OP_READ;
@@ -23,76 +24,23 @@ public class SelectiveRepeatARQClient {
 
     private ARQClientState state;
     private Long base;
-    private int port;
+    private InetSocketAddress serverAddr;
+    private SocketAddress routerAddr;
 
-    public SelectiveRepeatARQClient(int port) {
-        this.port = port;
+    public SelectiveRepeatARQClient(InetSocketAddress serverAddr, SocketAddress routerAddr) {
         this.state = ARQClientState.LISTEN;
         this.base = 0L;
+        this.serverAddr = serverAddr;
+        this.routerAddr = routerAddr;
     }
 
     private static final Logger logger = LoggerFactory.getLogger(SelectiveRepeatARQClient.class);
 
-    private static void runClient(SocketAddress routerAddr, InetSocketAddress serverAddr) throws IOException {
-        try(DatagramChannel channel = DatagramChannel.open()){
-            String msg = "Hello World";
-            Packet p = new Packet.Builder()
-                    .setType(0)
-                    .setSequenceNumber(1L)
-                    .setPortNumber(serverAddr.getPort())
-                    .setPeerAddress(serverAddr.getAddress())
-                    .setPayload(msg.getBytes())
-                    .create();
-            channel.send(p.toBuffer(), routerAddr);
-
-            logger.debug("Sending \"{}\" to router at {}", msg, routerAddr);
-
-            // Try to receive a packet within timeout.
-            channel.configureBlocking(false);
-            Selector selector = Selector.open();
-            channel.register(selector, OP_READ);
-            logger.debug("Waiting for the response");
-            selector.select(5000);
-
-            Set<SelectionKey> keys = selector.selectedKeys();
-            if(keys.isEmpty()){
-                logger.error("No response after timeout");
-                return;
-            }
-
-            // We just want a single response.
-            ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
-            SocketAddress router = channel.receive(buf);
-            buf.flip();
-            Packet resp = Packet.fromBuffer(buf);
-            logger.debug("Packet: {}", resp);
-            logger.debug("Router: {}", router);
-            String payload = new String(resp.getPayload(), StandardCharsets.UTF_8);
-            logger.debug("Payload: {}",  payload);
-
-            keys.clear();
-        }
-    }
-
     public void run() throws IOException {
         try (DatagramChannel channel = DatagramChannel.open()) {
-            channel.bind(new InetSocketAddress(port));
-            ByteBuffer buf = ByteBuffer
-                    .allocate(Packet.MAX_LEN)
-                    .order(ByteOrder.BIG_ENDIAN);
-
             for (; ; ) {
-                buf.clear();
-                SocketAddress router = channel.receive(buf);
-
-                // Parse a packet from the received raw data.
-                buf.flip();
-                Packet packet = Packet.fromBuffer(buf);
-                buf.flip();
-
                 // The packet to respond with
-                Packet responsePacket = null;
-
+                Packet responsePacket;
                 if (this.state == ARQClientState.LISTEN) {
                     // Change state to SYN_RCVD
                     this.state = ARQClientState.SYN_SENT;
@@ -101,72 +49,126 @@ public class SelectiveRepeatARQClient {
                     responsePacket = new Packet
                             .Builder()
                             .setType(Packet.Type.SYN.ordinal())
-                            .setSequenceNumber(++this.base)
+                            .setPortNumber(serverAddr.getPort())
+                            .setPeerAddress(serverAddr.getAddress())
+                            .setSequenceNumber(base++)
+                            .setPayload("SYN".getBytes())
                             .create();
+
+                    // Send packet
+                    channel.send(responsePacket.toBuffer(), routerAddr);
+                    logger.info("Changing state from LISTEN to SYN_SENT");
+                    logger.debug("Sending packet of type SYN: {}", responsePacket);
+                    logger.debug("Router: {}", responsePacket);
+                    String responsePacketPayload = new String(responsePacket.getPayload(), StandardCharsets.UTF_8);
+                    logger.debug("Payload: {}",  responsePacketPayload);
+
                 } else if (this.state == ARQClientState.SYN_SENT) {
+                    // Wait for acknowledgment of SYN packet
+                    ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
+                    SocketAddress router = channel.receive(buf);
+
+                    // Parse a packet from the received raw data.
+                    buf.flip();
+                    Packet packet = Packet.fromBuffer(buf);
+                    buf.flip();
+
+                    logger.debug("Received packet: {}", packet);
+                    logger.debug("Router: {}", router);
+                    String payload = new String(packet.getPayload(), StandardCharsets.UTF_8);
+                    logger.debug("Payload: {}",  payload);
+
                     // Handshake: received and acknowledgement of SYN_RCVD
                     if (packet.getType() == Packet.Type.SYN_ACK.ordinal()) {
+                        logger.info("Received packet is of type SYN_ACK");
+
                         // Change state to ESTAB
                         this.state = ARQClientState.ESTAB;
+
+                        // Increment base to next sequence number
+                        if (packet.getSequenceNumber() == base) {
+                            base++;
+                        } else {
+                            continue;
+                        }
 
                         // Create ACK packet with next sequence number
                         responsePacket = new Packet
                                 .Builder()
                                 .setType(Packet.Type.ACK.ordinal())
-                                .setSequenceNumber(++this.base)
+                                .setPortNumber(serverAddr.getPort())
+                                .setPeerAddress(serverAddr.getAddress())
+                                .setSequenceNumber(base)
+                                .setPayload("ACK for SYN_ACK".getBytes())
                                 .create();
+
+                        // Send packet
+                        channel.send(responsePacket.toBuffer(), router);
+                        logger.debug("Sending ACK for SYN_ACK: {}", responsePacket);
+                        logger.debug("Router: {}", responsePacket);
+                        String responsePacketPayload = new String(responsePacket.getPayload(), StandardCharsets.UTF_8);
+                        logger.debug("Payload: {}",  responsePacketPayload);
+
+                        logger.info("Changing state from SYN_SENT to ESTAB");
+
                     }
                 } else if (this.state == ARQClientState.ESTAB) {
                     // Selective repeat logic
+                    logger.info("Selective repeat");
+                    logger.debug("Current sequence number: {}", base);
+                    return;
                 }
-
-                String payload = new String(packet.getPayload(), UTF_8);
-
-                // Send the response to the router not the client.
-                // The peer address of the packet is the address of the client already.
-                // We can use toBuilder to copy properties of the current packet.
-                // This demonstrate how to create a new packet from an existing packet.
-                Packet resp = packet.toBuilder()
-                        .setPayload(payload.getBytes())
-                        .create();
-                channel.send(resp.toBuffer(), router);
-
+//                // Try to receive a packet within timeout.
+//                channel.configureBlocking(false);
+//                Selector selector = Selector.open();
+//                channel.register(selector, OP_READ);
+//                logger.debug("Waiting for the response");
+//                selector.select(5000);
+//
+//                Set<SelectionKey> keys = selector.selectedKeys();
+//                if(keys.isEmpty()){
+//                    logger.error("No response for packet with sequence number {} after timeout", responsePacket.getSequenceNumber());
+//                    return;
+//                }
+//
+//                keys.clear();
             }
         }
     }
 
     public static void main(String[] args) throws IOException {
-        OptionParser parser = new OptionParser();
-        parser.accepts("router-host", "Router hostname")
-                .withOptionalArg()
-                .defaultsTo("localhost");
+//        OptionParser parser = new OptionParser();
+//        parser.accepts("router-host", "Router hostname")
+//                .withOptionalArg()
+//                .defaultsTo("localhost");
+//
+//        parser.accepts("router-port", "Router port number")
+//                .withOptionalArg()
+//                .defaultsTo("3000");
+//
+//        parser.accepts("server-host", "EchoServer hostname")
+//                .withOptionalArg()
+//                .defaultsTo("localhost");
+//
+//        parser.accepts("server-port", "EchoServer listening port")
+//                .withOptionalArg()
+//                .defaultsTo("8007");
+//
+//        OptionSet opts = parser.parse(args);
+//
+//        // Router address
+//        String routerHost = (String) opts.valueOf("router-host");
+//        int routerPort = Integer.parseInt((String) opts.valueOf("router-port"));
+//
+//        // Server address
+//        String serverHost = (String) opts.valueOf("server-host");
+//        int serverPort = Integer.parseInt((String) opts.valueOf("server-port"));
 
-        parser.accepts("router-port", "Router port number")
-                .withOptionalArg()
-                .defaultsTo("3000");
+        SocketAddress routerAddress = new InetSocketAddress("localhost", 3000);
+        InetSocketAddress serverAddress = new InetSocketAddress("localhost", 8007);
 
-        parser.accepts("server-host", "EchoServer hostname")
-                .withOptionalArg()
-                .defaultsTo("localhost");
-
-        parser.accepts("server-port", "EchoServer listening port")
-                .withOptionalArg()
-                .defaultsTo("8007");
-
-        OptionSet opts = parser.parse(args);
-
-        // Router address
-        String routerHost = (String) opts.valueOf("router-host");
-        int routerPort = Integer.parseInt((String) opts.valueOf("router-port"));
-
-        // Server address
-        String serverHost = (String) opts.valueOf("server-host");
-        int serverPort = Integer.parseInt((String) opts.valueOf("server-port"));
-
-        SocketAddress routerAddress = new InetSocketAddress(routerHost, routerPort);
-        InetSocketAddress serverAddress = new InetSocketAddress(serverHost, serverPort);
-
-        runClient(routerAddress, serverAddress);
+        SelectiveRepeatARQClient client = new SelectiveRepeatARQClient(serverAddress, routerAddress);
+        client.run();
     }
 }
 
