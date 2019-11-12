@@ -12,6 +12,14 @@ import java.nio.ByteOrder;
  */
 public class Packet {
 
+    public enum Type {
+        DATA,
+        SYN,
+        ACK,
+        SYN_ACK,
+        NAK;
+    }
+
     public static final int MIN_LEN = 11;
     public static final int MAX_LEN = 11 + 1024;
 

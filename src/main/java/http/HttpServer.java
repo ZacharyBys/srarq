@@ -1,13 +1,13 @@
 package http;
 
-import com.google.gson.JsonObject;
+import ARQ.ARQ;
+import SelectiveRepeatARQServer;
 
 import java.io.*;
-import java.net.ServerSocket;
 import java.net.Socket;
 
 public class HttpServer {
-    private ServerSocket server;
+    private ARQ server;
     private boolean running;
     private boolean debug;
 
@@ -15,14 +15,14 @@ public class HttpServer {
     private HttpRequestHandler postRequestHandler;
 
     public HttpServer(int port) throws IOException {
-        this.server = new ServerSocket(port);
+        this.server = new SelectiveRepeatARQServer(port);
         System.out.println("Server listening on port " + this.server.getLocalPort());
     }
 
     public void run() throws IOException {
         this.running = true;
         while (running) {
-            Socket client = server.accept();
+            ARQSocket client = server.accept();
             try {
                 if (this.debug) {
                     System.out.println("Connection accepted\n");
