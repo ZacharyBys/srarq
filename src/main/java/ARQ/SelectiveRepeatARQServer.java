@@ -17,7 +17,7 @@ public class SelectiveRepeatARQServer implements ARQ {
 
     private long base;
 
-    private static final Logger logger = LoggerFactory.getLogger(SelectiveRepeatARQClient.class);
+    private static final Logger logger = LoggerFactory.getLogger(SelectiveRepeatARQServer.class);
 
     public SelectiveRepeatARQServer(int port) {
         this.port = port;
@@ -28,15 +28,15 @@ public class SelectiveRepeatARQServer implements ARQ {
         return this.port;
     }
 
-    public ARQServerSocket accept() throws IOException {
+    public ARQSocket accept() throws IOException {
+        ARQSocket serverSocket;
         try (DatagramChannel channel = DatagramChannel.open()) {
-            channel.bind(new InetSocketAddress(port));
+            logger.debug("Binding server datagram channel to port {}", port);
+            channel.bind(new InetSocketAddress(8008));
+
             ByteBuffer buf = ByteBuffer
                     .allocate(Packet.MAX_LEN)
                     .order(ByteOrder.BIG_ENDIAN);
-
-            logger.debug("Binding datagram channel to port {}", port);
-
             for (; ; ) {
                 if (state == ARQServerState.CLOSED) {
                     // Change state to listen
@@ -68,7 +68,7 @@ public class SelectiveRepeatARQServer implements ARQ {
 
                         // Set base to sequence number in SYN packet
                         base = receivedPacket.getSequenceNumber();
-                        logger.debug("Setting base sequence number to {}", base);
+                        logger.debug("Setting base sequence number to {}", 1);
 
                         // Create SYN-ACK packet
                         responsePacket = new Packet
@@ -117,15 +117,11 @@ public class SelectiveRepeatARQServer implements ARQ {
 
                     }
                 } else if (state == ARQServerState.ESTAB) {
-                    // Selective repeat logic
                     logger.debug("Connection established");
-                    logger.debug("Current sequence number: {}", base);
-
-                    ARQServerSocket serverSocket =  new ARQServerSocket(port, base);
+                    serverSocket =  new ARQSocket(port, 1, new InetSocketAddress("localhost", 8009));
                     resetForNewConnection();
                     return serverSocket;
                 }
-
             }
         }
     }

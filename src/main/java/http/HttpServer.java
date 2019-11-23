@@ -2,7 +2,7 @@ package http;
 
 import ARQ.ARQ;
 import ARQ.SelectiveRepeatARQServer;
-import ARQ.ARQServerSocket;
+import ARQ.ARQSocket;
 
 import java.io.*;
 
@@ -22,7 +22,7 @@ public class HttpServer {
     public void run() throws IOException {
         this.running = true;
         while (running) {
-            ARQServerSocket client = server.accept();
+            ARQSocket client = server.accept();
             try {
                 if (this.debug) {
                     System.out.println("Connection accepted\n");
@@ -55,7 +55,7 @@ public class HttpServer {
         this.debug = debug;
     }
 
-    private void readAndHandleRequestFromClient(ARQServerSocket client) throws IOException {
+    private void readAndHandleRequestFromClient(ARQSocket client) throws IOException {
         BufferedReader reader = new BufferedReader( new InputStreamReader(client.getInputStream()));
 
         StringBuilder stringBuilder = new StringBuilder();

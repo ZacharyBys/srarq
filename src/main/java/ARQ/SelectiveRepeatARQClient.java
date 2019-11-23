@@ -10,9 +10,13 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
-public class SelectiveRepeatARQClient {
+import static java.lang.Thread.sleep;
+
+public class SelectiveRepeatARQClient implements ARQ {
+    private static final int CLIENT_SOCKET_PORT = 8009;
 
     private ARQClientState state;
     private Long base;
@@ -28,7 +32,7 @@ public class SelectiveRepeatARQClient {
 
     private static final Logger logger = LoggerFactory.getLogger(SelectiveRepeatARQClient.class);
 
-    public void run() throws IOException {
+    public ARQSocket accept() throws IOException {
         try (DatagramChannel channel = DatagramChannel.open()) {
             for (; ; ) {
                 // The packet to respond with
@@ -36,7 +40,6 @@ public class SelectiveRepeatARQClient {
                 if (state == ARQClientState.LISTEN) {
                     // Change state to SYN_RCVD
                     state = ARQClientState.SYN_SENT;
-
                     // Create SYN_SENT packet
                     responsePacket = new Packet
                             .Builder()
@@ -98,75 +101,18 @@ public class SelectiveRepeatARQClient {
 
                     }
                 } else if (state == ARQClientState.ESTAB) {
-                    // Selective repeat logic
-                    logger.info("Selective repeat");
-                    logger.debug("Current sequence number: {}", base);
-
-                    // BELOW IS JUST A TEST
-
-                    // Send GET request
-                    Packet getRequestPacket = new Packet
-                            .Builder()
-                            .setType(Packet.Type.DATA_END.ordinal())
-                            .setPortNumber(serverAddr.getPort())
-                            .setPeerAddress(serverAddr.getAddress())
-                            .setSequenceNumber(++base)
-                            .setPayload("GET / HTTP/1.1\r\n".getBytes())
-                            .create();
-
-                    // Send GET request packet
-                    channel.send(getRequestPacket.toBuffer(), routerAddr);
-                    logger.debug("Sending GET request packet");
-                    logPacketSentOrReceived(getRequestPacket);
-
-                    ByteBuffer buf = ByteBuffer.allocate(Packet.MAX_LEN);
-                    SocketAddress router = channel.receive(buf);
-
-                    List<Packet> packets = new ArrayList<>();
-
-                    // Parse all packets containing fragmented data
-                    buf.flip();
-                    Packet packet = Packet.fromBuffer(buf);
-                    buf.flip();
-                    while (packet.getType() != Packet.Type.DATA_END.ordinal()) {
-                        packets.add(packet);
-                        buf = ByteBuffer.allocate(Packet.MAX_LEN);
-                        channel.receive(buf);
-                        buf.flip();
-                        packet = Packet.fromBuffer(buf);
-                        buf.flip();
-                    }
-
-                    // Add last DATA_END packet
-                    packets.add(packet);
-
-                    StringBuilder response = new StringBuilder();
-                    logger.debug("Received {} packets", packets.size());
-                    for (Packet p : packets) {
-                        logPacketSentOrReceived(p);
-                        String payload = new String(p.getPayload(), StandardCharsets.UTF_8);
-                        response.append(payload);
-                    }
-
-                    logger.debug("Complete payload received: {}", response);
-                    return;
+                    logger.info("Connection established");
+                    ARQSocket clientSocket = new ARQSocket(CLIENT_SOCKET_PORT, 1, new InetSocketAddress("localhost", 8007));
+                    resetForNewConnection();
+                    return clientSocket;
                 }
-//                // Try to receive a packet within timeout.
-//                channel.configureBlocking(false);
-//                Selector selector = Selector.open();
-//                channel.register(selector, OP_READ);
-//                logger.debug("Waiting for the response");
-//                selector.select(5000);
-//
-//                Set<SelectionKey> keys = selector.selectedKeys();
-//                if(keys.isEmpty()){
-//                    logger.error("No response for packet with sequence number {} after timeout", responsePacket.getSequenceNumber());
-//                    return;
-//                }
-//
-//                keys.clear();
             }
         }
+    }
+
+    @Override
+    public int getLocalPort() {
+        return CLIENT_SOCKET_PORT;
     }
 
     private void logPacketSentOrReceived(Packet packet) {
@@ -175,39 +121,46 @@ public class SelectiveRepeatARQClient {
         logger.debug("Payload: {}",  getRequestPayload);
     }
 
-    public static void main(String[] args) throws IOException {
-//        OptionParser parser = new OptionParser();
-//        parser.accepts("router-host", "Router hostname")
-//                .withOptionalArg()
-//                .defaultsTo("localhost");
-//
-//        parser.accepts("router-port", "Router port number")
-//                .withOptionalArg()
-//                .defaultsTo("3000");
-//
-//        parser.accepts("server-host", "EchoServer hostname")
-//                .withOptionalArg()
-//                .defaultsTo("localhost");
-//
-//        parser.accepts("server-port", "EchoServer listening port")
-//                .withOptionalArg()
-//                .defaultsTo("8007");
-//
-//        OptionSet opts = parser.parse(args);
-//
-//        // Router address
-//        String routerHost = (String) opts.valueOf("router-host");
-//        int routerPort = Integer.parseInt((String) opts.valueOf("router-port"));
-//
-//        // Server address
-//        String serverHost = (String) opts.valueOf("server-host");
-//        int serverPort = Integer.parseInt((String) opts.valueOf("server-port"));
+    private void resetForNewConnection() {
+        base = 0L;
+        state = ARQClientState.LISTEN;
+    }
 
+    public static void main(String[] args) throws IOException, InterruptedException {
         SocketAddress routerAddress = new InetSocketAddress("localhost", 3000);
-        InetSocketAddress serverAddress = new InetSocketAddress("localhost", 8007);
-
+        InetSocketAddress serverAddress = new InetSocketAddress("localhost", 8008);
         SelectiveRepeatARQClient client = new SelectiveRepeatARQClient(serverAddress, routerAddress);
-        client.run();
+
+        List<String> requests = new ArrayList<>();
+        String content = "We out here";
+        requests.addAll(Arrays.asList(
+                "GET / HTTP/1.1\r\n",
+                "GET /test_file.txt HTTP/1.1\r\n",
+                String.format("POST /yeet.txt HTTP/1.1\r\nContent-Length: %d\r\n\r\n%s", content.length(), content)
+        ));
+
+        requests.forEach(request -> {
+            try {
+                // Get new socket
+                ARQSocket clientSocket = client.accept();
+
+                logger.debug("Sleeping for 3s");
+                sleep(3000);
+
+                // Make request
+                logger.debug("Making the following HTTP request: {}", request);
+                clientSocket.getOutputStream().write(request.getBytes());
+
+                logger.debug("Sleeping for 3s");
+                sleep(3000);
+
+                // Get response from server
+                clientSocket.getInputStream();
+                clientSocket.close();
+            } catch (IOException | InterruptedException e) {
+                e.printStackTrace();
+            }
+        });
     }
 }
 
