@@ -61,6 +61,16 @@ public class ARQReceiver {
             // We received the last packet
             if (receivedPacket.getType() == Packet.Type.DATA_END.ordinal()) {
                 logger.debug("Received last data packet");
+                // Send acknowledgement for received packet
+                Packet acknowledgementPacket = new Packet
+                        .Builder()
+                        .setType(Packet.Type.ACK.ordinal())
+                        .setPeerAddress(receivedPacket.getPeerAddress())
+                        .setPortNumber(receivedPacket.getPeerPort())
+                        .setSequenceNumber(receivedPacket.getSequenceNumber())
+                        .setPayload("".getBytes())
+                        .create();
+                channel.send(acknowledgementPacket.toBuffer(), routerAddress);
                 break;
             }
 
@@ -105,19 +115,6 @@ public class ARQReceiver {
         logger.debug("Complete payload received: \n{}", new String(reconstructedPayload, StandardCharsets.UTF_8));
 
         return reconstructedPayload;
-    }
-
-    protected boolean isWithinReceiveWindow(long receivedPacketSequenceNumber) {
-        int windowStart = windowIndex % WINDOW_SIZE;
-        int windowEnd = (windowIndex + SEQUENCE_SIZE - 1) % WINDOW_SIZE;
-
-        for (int i = Math.min(windowStart, windowEnd) + 1; i < Math.max(windowStart, windowEnd); i++) {
-            if (receivedPacketSequenceNumber == sequenceNumbers[i]) {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private byte[] reconstructFragmentedPayload(List<Packet> receivedPackets) {
