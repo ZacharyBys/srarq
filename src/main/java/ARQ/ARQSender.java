@@ -9,14 +9,12 @@ import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 public class ARQSender {
     private final int WINDOW_SIZE = 3;
     private final int SEQUENCE_SIZE = 2 * WINDOW_SIZE;
+    private final int TIMER_RESEND_VALUE = 3000;
 
     private int port;
     private DatagramChannel channel;
@@ -26,6 +24,7 @@ public class ARQSender {
     private Long base;
     private int[] sequenceNumbers;
     private int windowIndex = 0;
+    private HashMap<Integer, Timer> packetTimers = new HashMap<Integer, Timer>();
 
     private static final Logger logger = LoggerFactory.getLogger(ARQSender.class);
 
@@ -74,6 +73,41 @@ public class ARQSender {
         }
 
         return packetsToSend;
+    }
+
+    class ResendTask extends TimerTask
+    {
+        private Packet packet;
+        private DatagramChannel channel;
+        private SocketAddress routerAddress;
+
+        public ResendTask(DatagramChannel channel, SocketAddress routerAddress, Packet packet) {
+            this.channel = channel;
+            this.routerAddress = routerAddress;
+            this.packet = packet;
+        }
+
+        public void run()
+        {
+            try {
+                this.channel.send(this.packet.toBuffer(), this.routerAddress);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+    }
+
+    private void setPacketTimer(int windowIndex, Packet packet) {
+        Timer timer = new Timer();
+        ResendTask resendTask = new ResendTask(this.channel, this.routerAddress, packet);
+
+        packetTimers.put(windowIndex, timer);
+        timer.schedule(resendTask, TIMER_RESEND_VALUE);
+    }
+
+    private void cancelPacketResend(int windowIndex) {
+        packetTimers.get(windowIndex).cancel();
+        packetTimers.remove(windowIndex);
     }
 
     public void send(byte[] payload) throws IOException {
