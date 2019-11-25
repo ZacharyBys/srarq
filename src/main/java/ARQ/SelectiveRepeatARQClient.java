@@ -157,6 +157,9 @@ public class SelectiveRepeatARQClient implements ARQ {
                 // Get response from server
                 clientSocket.getInputStream();
                 clientSocket.close();
+
+                logger.debug("Sleeping for 3s");
+                sleep(3000);
             } catch (IOException | InterruptedException e) {
                 e.printStackTrace();
             }

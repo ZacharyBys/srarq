@@ -50,12 +50,19 @@ public class ARQReceiver {
         while (true) {
             logger.debug("Waiting for packets");
             logger.debug("Next in-order sequence number: {}", sequenceNumbers[windowIndex]);
+
             // Receive packet
             channel.receive(buf);
 
             buf.flip();
             Packet receivedPacket = Packet.fromBuffer(buf);
             buf.flip();
+
+            // We received the last packet
+            if (receivedPacket.getType() == Packet.Type.DATA_END.ordinal()) {
+                logger.debug("Received last data packet");
+                break;
+            }
 
             // Send acknowledgement for received packet
             Packet acknowledgementPacket = new Packet
@@ -70,30 +77,26 @@ public class ARQReceiver {
             channel.send(acknowledgementPacket.toBuffer(), routerAddress);
             logger.debug("Sending acknowledgement for packet with sequence number {}", receivedPacket.getSequenceNumber());
 
-            // We received the last packet
-            if (receivedPacket.getType() == Packet.Type.DATA_END.ordinal()) {
-                logger.debug("Received last data packet");
+            if (receivedPacket.getSequenceNumber() == sequenceNumbers[windowIndex]) {
+                logger.debug("Last packet received (sequence number={}) was in-order", receivedPacket.getSequenceNumber());
                 packets.add(receivedPacket);
-                break;
-            }
 
-            if (isWithinReceiveWindow(receivedPacket.getSequenceNumber())) {
-                // Received in-order packet
-                if (receivedPacket.getSequenceNumber() == sequenceNumbers[windowIndex]) {
-                    logger.debug("Last packet received (sequence number={}) was in-order", receivedPacket.getSequenceNumber());
-                    packets.add(receivedPacket);
-                    windowIndex = (windowIndex + 1) % SEQUENCE_SIZE;
-                    // Move base to next not-yet-received packet
-                    while (receivedPacketBuffer.containsKey(sequenceNumbers[windowIndex])) {
-                        Packet bufferedPacket = receivedPacketBuffer.remove(sequenceNumbers[windowIndex]);
-                        packets.add(bufferedPacket);
-                        windowIndex = (windowIndex + 1) % SEQUENCE_SIZE;
-                    }
-                } else {
-                    // Received out of order packet
-                    logger.debug("Received out-of-order packet with sequence number {}", receivedPacket.getSequenceNumber());
-                    receivedPacketBuffer.put(receivedPacket.getSequenceNumber(), receivedPacket);
+                int bufferedIdx = (windowIndex + 1) % SEQUENCE_SIZE;
+                // Move base to next not-yet-received packet
+                logger.debug("Buffered sequence numbers {}", receivedPacketBuffer.keySet());
+                logger.debug("Trying to advance base, starting at sequence number {}", sequenceNumbers[bufferedIdx]);
+                while (receivedPacketBuffer.containsKey((long) sequenceNumbers[bufferedIdx])) {
+                    logger.debug("Removed packet with sequence number {} from buffer", sequenceNumbers[bufferedIdx]);
+                    Packet bufferedPacket = receivedPacketBuffer.remove((long) sequenceNumbers[bufferedIdx]);
+                    packets.add(bufferedPacket);
+                    bufferedIdx = (bufferedIdx + 1) % SEQUENCE_SIZE;
                 }
+
+                windowIndex = bufferedIdx;
+            } else {
+                // Received out of order packet
+                logger.debug("Received out-of-order packet with sequence number {}", receivedPacket.getSequenceNumber());
+                receivedPacketBuffer.put(receivedPacket.getSequenceNumber(), receivedPacket);
             }
         }
 

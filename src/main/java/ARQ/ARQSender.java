@@ -59,18 +59,8 @@ public class ARQSender {
             for (int i = start; i < offset; i++) {
                 payloadFragment[j++] = b[i];
             }
-            Packet packet;
-            if (remaining <= Packet.MAX_PAYLOAD_LEN) {
-                packet = new Packet
-                        .Builder()
-                        .setType(Packet.Type.DATA_END.ordinal())
-                        .setPeerAddress(peerAddress.getAddress())
-                        .setPortNumber(peerAddress.getPort())
-                        .setSequenceNumber((initialSequenceNumber++) % SEQUENCE_SIZE + 1)
-                        .setPayload(payloadFragment)
-                        .create();
-            } else {
-                packet = new Packet
+
+            Packet packet = new Packet
                         .Builder()
                         .setType(Packet.Type.DATA.ordinal())
                         .setPeerAddress(peerAddress.getAddress())
@@ -78,7 +68,6 @@ public class ARQSender {
                         .setSequenceNumber((initialSequenceNumber++) % SEQUENCE_SIZE + 1)
                         .setPayload(payloadFragment)
                         .create();
-            }
 
             packetsToSend.add(packet);
             remaining -= Packet.MAX_PAYLOAD_LEN;
@@ -112,7 +101,6 @@ public class ARQSender {
         for (int i = windowIndex; i < windowIndex + WINDOW_SIZE && i < sequenceNumbers.length; i++) {
             Packet nextPacket = packetsToSend.get(i);
             channel.send(nextPacket.toBuffer(), routerAddress);
-            logPacketSentOrReceived(nextPacket);
         }
 
         logger.debug("Now waiting to received acknowledgements for all sent packets");
@@ -121,13 +109,15 @@ public class ARQSender {
             if (receivedAcks.size() > 0) {
                 logger.debug("Received acknowledgment for the following sequence numbers: {}", receivedAcks);
             }
+
+            logger.debug("Next in-order packet is {}", sequenceNumbers[windowIndex]);
             // Receive acknowledgements for sent packets
             channel.receive(buf);
 
             buf.flip();
             Packet acknowledgmentPacket = Packet.fromBuffer(buf);
             buf.flip();
-            logPacketSentOrReceived(acknowledgmentPacket);
+
             if (acknowledgmentPacket.getSequenceNumber() == sequenceNumbers[windowIndex]) {
                 logger.debug("Received acknowledgement packet with sequence number {}", acknowledgmentPacket.getSequenceNumber());
                 // Increment send base
@@ -142,35 +132,47 @@ public class ARQSender {
                 // Send next packet
                 int nextPacketIndex = windowIndex + WINDOW_SIZE - 1;
                 if (nextPacketIndex < sequenceNumbers.length) {
+                    Packet nextPacket = packetsToSend.get(nextPacketIndex);
+                    logger.debug("Sending packet with sequence number {}", nextPacket.getSequenceNumber());
+                    channel.send(nextPacket.toBuffer(), routerAddress);
+                }
+            } else {
+                logger.debug("Buffering acknowledgement for packet with sequence number {}", acknowledgmentPacket.getSequenceNumber());
+                receivedAcks.add(acknowledgmentPacket.getSequenceNumber());
+            }
+
+            // Free up any acknowledged sequence numbers and send next packets
+            logger.debug("Freeing up sequence numbers to be re-used");
+            while (receivedAcks.contains((long) sequenceNumbers[windowIndex])) {
+                logger.debug("Freeing up sequence number {}", sequenceNumbers[windowIndex]);
+                receivedAcks.remove(sequenceNumbers[windowIndex++]);
+
+                // Check if we've reached the end
+                if (windowIndex >= this.sequenceNumbers.length) {
+                    break;
+                }
+
+                int nextPacketIndex = windowIndex + WINDOW_SIZE - 1;
+                if (nextPacketIndex < sequenceNumbers.length) {
                     logger.debug("Sending next packet at index {}", nextPacketIndex);
                     Packet nextPacket = packetsToSend.get(nextPacketIndex);
                     channel.send(nextPacket.toBuffer(), routerAddress);
                     logPacketSentOrReceived(nextPacket);
                 }
-
-                // Free up any acknowledged sequence numbers and send next packets
-                logger.debug("Freeing up sequence numbers to be re-used");
-                while (receivedAcks.contains(sequenceNumbers[windowIndex])) {
-                    logger.debug("Freeing up sequence number {}", sequenceNumbers[windowIndex]);
-                    receivedAcks.remove(sequenceNumbers[windowIndex++]);
-
-                    // Check if we've reached the end
-                    if (windowIndex > this.sequenceNumbers.length) {
-                        break;
-                    }
-
-                    nextPacketIndex = windowIndex + WINDOW_SIZE - 1;
-                    if (nextPacketIndex < sequenceNumbers.length) {
-                        logger.debug("Sending next packet at index {}", nextPacketIndex);
-                        Packet nextPacket = packetsToSend.get(nextPacketIndex);
-                        channel.send(nextPacket.toBuffer(), routerAddress);
-                        logPacketSentOrReceived(nextPacket);
-                    }
-                }
-            } else {
-                receivedAcks.add(acknowledgmentPacket.getSequenceNumber());
             }
         }
+
+        // Send packet signifying that whole payload has been sent
+        Packet endPacket = new Packet
+                .Builder()
+                .setType(Packet.Type.DATA_END.ordinal())
+                .setPeerAddress(peerAddress.getAddress())
+                .setPortNumber(peerAddress.getPort())
+                .setSequenceNumber(0)
+                .setPayload("".getBytes())
+                .create();
+
+        channel.send(endPacket.toBuffer(), routerAddress);
     }
 
     private void logPacketSentOrReceived(Packet packet) {
