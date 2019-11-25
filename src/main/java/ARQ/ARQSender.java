@@ -80,17 +80,25 @@ public class ARQSender {
         private Packet packet;
         private DatagramChannel channel;
         private SocketAddress routerAddress;
+        private int windowIndex;
 
-        public ResendTask(DatagramChannel channel, SocketAddress routerAddress, Packet packet) {
+        public ResendTask(DatagramChannel channel, SocketAddress routerAddress, Packet packet, int windowIndex) {
             this.channel = channel;
             this.routerAddress = routerAddress;
             this.packet = packet;
+            this.windowIndex = windowIndex;
         }
 
         public void run()
         {
             try {
+                logger.debug("Sending packet with sequence number {}", this.packet.getSequenceNumber());
                 this.channel.send(this.packet.toBuffer(), this.routerAddress);
+
+                Timer timer = new Timer();
+                ResendTask resendTask = new ResendTask(this.channel, this.routerAddress, packet, windowIndex);
+                packetTimers.put(windowIndex, timer);
+                timer.schedule(resendTask, TIMER_RESEND_VALUE);
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -99,14 +107,22 @@ public class ARQSender {
 
     private void setPacketTimer(int windowIndex, Packet packet) {
         Timer timer = new Timer();
-        ResendTask resendTask = new ResendTask(this.channel, this.routerAddress, packet);
-
+        ResendTask resendTask = new ResendTask(this.channel, this.routerAddress, packet, windowIndex);
         packetTimers.put(windowIndex, timer);
         timer.schedule(resendTask, TIMER_RESEND_VALUE);
+        logger.debug("Setting Timer");
+    }
+
+    private void sendPacket(int windowIndex, Packet packet) throws IOException {
+        channel.send(packet.toBuffer(), routerAddress);
+        this.setPacketTimer(windowIndex, packet);
     }
 
     private void cancelPacketResend(int windowIndex) {
-        packetTimers.get(windowIndex).cancel();
+        if (packetTimers.containsKey(windowIndex)) {
+            packetTimers.get(windowIndex).cancel();
+        }
+
         packetTimers.remove(windowIndex);
     }
 
@@ -134,7 +150,7 @@ public class ARQSender {
         // Send packets from windowIndex to windowIndex + WINDOW_SIZE
         for (int i = windowIndex; i < windowIndex + WINDOW_SIZE && i < sequenceNumbers.length; i++) {
             Packet nextPacket = packetsToSend.get(i);
-            channel.send(nextPacket.toBuffer(), routerAddress);
+            this.sendPacket(windowIndex, nextPacket);
         }
 
         logger.debug("Now waiting to received acknowledgements for all sent packets");
@@ -154,6 +170,7 @@ public class ARQSender {
 
             if (acknowledgmentPacket.getSequenceNumber() == sequenceNumbers[windowIndex]) {
                 logger.debug("Received acknowledgement packet with sequence number {}", acknowledgmentPacket.getSequenceNumber());
+                this.cancelPacketResend(windowIndex);
                 // Increment send base
                 windowIndex++;
 
@@ -168,7 +185,7 @@ public class ARQSender {
                 if (nextPacketIndex < sequenceNumbers.length) {
                     Packet nextPacket = packetsToSend.get(nextPacketIndex);
                     logger.debug("Sending packet with sequence number {}", nextPacket.getSequenceNumber());
-                    channel.send(nextPacket.toBuffer(), routerAddress);
+                    this.sendPacket(windowIndex, nextPacket);
                 }
             } else {
                 logger.debug("Buffering acknowledgement for packet with sequence number {}", acknowledgmentPacket.getSequenceNumber());
@@ -179,6 +196,7 @@ public class ARQSender {
             logger.debug("Freeing up sequence numbers to be re-used");
             while (receivedAcks.contains((long) sequenceNumbers[windowIndex])) {
                 logger.debug("Freeing up sequence number {}", sequenceNumbers[windowIndex]);
+                this.cancelPacketResend(windowIndex);
                 receivedAcks.remove(sequenceNumbers[windowIndex++]);
 
                 // Check if we've reached the end
@@ -190,7 +208,7 @@ public class ARQSender {
                 if (nextPacketIndex < sequenceNumbers.length) {
                     logger.debug("Sending next packet at index {}", nextPacketIndex);
                     Packet nextPacket = packetsToSend.get(nextPacketIndex);
-                    channel.send(nextPacket.toBuffer(), routerAddress);
+                    this.sendPacket(windowIndex, nextPacket);
                     logPacketSentOrReceived(nextPacket);
                 }
             }

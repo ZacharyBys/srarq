@@ -11,23 +11,27 @@ import java.nio.channels.DatagramChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 
 import static java.lang.Thread.sleep;
 
 public class SelectiveRepeatARQClient implements ARQ {
     private static final int CLIENT_SOCKET_PORT = 8009;
+    private static final int TIMER_RESEND_VALUE = 5000;
 
     private ARQClientState state;
     private Long base;
     private InetSocketAddress serverAddr;
     private SocketAddress routerAddr;
+    private Date date;
 
     public SelectiveRepeatARQClient(InetSocketAddress serverAddr, SocketAddress routerAddr) {
         state = ARQClientState.LISTEN;
         this.base = 0L;
         this.serverAddr = serverAddr;
         this.routerAddr = routerAddr;
+        this.date = new Date();
     }
 
     private static final Logger logger = LoggerFactory.getLogger(SelectiveRepeatARQClient.class);
@@ -51,7 +55,7 @@ public class SelectiveRepeatARQClient implements ARQ {
                             .create();
 
                     // Send packet
-                    channel.send(responsePacket.toBuffer(), routerAddr);
+                    channel.send(responsePacket.toBuffer(), serverAddr);
                     logger.info("Changing state from LISTEN to SYN_SENT");
                     logger.debug("Sending SYN packet");
                     logPacketSentOrReceived(responsePacket);
